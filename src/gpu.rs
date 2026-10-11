@@ -90,10 +90,6 @@ pub struct GpuState<'n> {
 
 impl<'n> GpuState<'n> {
     /// Drops stored GPM samples so the next reading isn't averaged over an idle gap.
-    pub fn reset(&mut self) {
-        self.prev.iter_mut().for_each(|p| *p = None);
-    }
-
     pub fn sample(&mut self) -> (Vec<GpuStats>, HashMap<u32, GpuProc>) {
         let mut out = Vec::with_capacity(self.count as usize);
         let mut procs: HashMap<u32, GpuProc> = HashMap::new();

@@ -1,5 +1,6 @@
-//! Background sampling thread. It only works while someone is watching: if no
-//! client has fetched stats recently, it idles instead of walking /proc.
+//! Background sampling thread. CPU, memory and GPU are sampled all the time
+//! (cheap) so chart history has no gaps; the process list, which means walking
+//! all of /proc, is only collected while some client is watching.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +14,7 @@ use sysinfo::{
 };
 
 use crate::gpu::{GpuSampler, GpuStats};
+use crate::topo::{self, CpuTopo};
 
 const IDLE_AFTER: Duration = Duration::from_secs(10);
 pub const MIN_INTERVAL_MS: u64 = 250;
@@ -28,17 +30,18 @@ struct Snapshot<'a> {
     hostname: &'a str,
     uptime: u64,
     load: [f64; 3],
-    cpu: CpuStats,
+    cpu: CpuStats<'a>,
     mem: MemStats,
     gpus: Vec<GpuStats>,
     procs: Vec<Proc>,
 }
 
 #[derive(Serialize)]
-struct CpuStats {
+struct CpuStats<'a> {
     total: f32,
     cores: Vec<f32>,
-    brand: String,
+    brand: &'a str,
+    topo: &'a [CpuTopo],
 }
 
 #[derive(Serialize)]
@@ -74,6 +77,8 @@ pub struct Shared {
     last_req: AtomicU64,
     /// Current sampling interval, as requested by viewers.
     interval_ms: AtomicU64,
+    /// Interval used while nobody is watching (`--interval`).
+    idle_interval_ms: u64,
     /// Millis since `epoch` when some viewer last confirmed `interval_ms`.
     interval_seen: AtomicU64,
     epoch: Instant,
@@ -86,17 +91,21 @@ impl Shared {
             history: Mutex::new(VecDeque::new()),
             last_req: AtomicU64::new(0),
             interval_ms: AtomicU64::new(interval_ms),
+            idle_interval_ms: interval_ms,
             interval_seen: AtomicU64::new(0),
             epoch: Instant::now(),
         })
     }
 
-    /// Chart history as a JSON array of trimmed-down snapshots.
-    pub fn history_json(&self) -> String {
+    /// Chart history newer than `since` (ms timestamp) as a JSON array of
+    /// trimmed-down snapshots.
+    pub fn history_json(&self, since: u64) -> String {
         let h = self.history.lock().unwrap();
-        let mut out = String::with_capacity(h.iter().map(|(_, j)| j.len() + 1).sum::<usize>() + 2);
+        let start = h.partition_point(|(t, _)| *t <= since);
+        let pts = h.range(start..);
+        let mut out = String::with_capacity(pts.clone().map(|(_, j)| j.len() + 1).sum::<usize>() + 2);
         out.push('[');
-        for (i, (_, j)) in h.iter().enumerate() {
+        for (i, (_, j)) in pts.enumerate() {
             if i > 0 {
                 out.push(',');
             }
@@ -137,7 +146,11 @@ impl Shared {
     }
 
     fn interval(&self) -> Duration {
-        Duration::from_millis(self.interval_ms.load(Ordering::Relaxed))
+        if self.active() {
+            Duration::from_millis(self.interval_ms.load(Ordering::Relaxed))
+        } else {
+            Duration::from_millis(self.idle_interval_ms)
+        }
     }
 
     fn active(&self) -> bool {
@@ -162,6 +175,9 @@ fn run(shared: Arc<Shared>) {
     let mut users = Users::new_with_refreshed_list();
     let hostname = System::host_name().unwrap_or_default();
     let brand = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
+    let topo = topo::detect(sys.cpus().iter().enumerate().map(|(i, c)| {
+        c.name().strip_prefix("cpu").and_then(|n| n.parse().ok()).unwrap_or(i as u32)
+    }));
 
     let gpu = GpuSampler::new();
     let mut gpu_state = gpu.as_ref().map(|g| g.state());
@@ -174,37 +190,38 @@ fn run(shared: Arc<Shared>) {
 
     let mut was_active = false;
     let mut user_cache: HashMap<String, String> = HashMap::new();
+    let prime = sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(300));
+
+    // Prime CPU / GPU counters so the first reading is meaningful.
+    sys.refresh_cpu_usage();
+    if let Some(g) = gpu_state.as_mut() {
+        g.sample();
+    }
+    std::thread::sleep(prime);
 
     loop {
-        if !shared.active() {
-            if was_active {
-                was_active = false;
-                if let Some(g) = gpu_state.as_mut() {
-                    g.reset();
-                }
-            }
-            std::thread::sleep(Duration::from_millis(200));
-            continue;
-        }
-        if !was_active {
-            // Prime CPU counters so the first published reading is meaningful.
-            was_active = true;
-            sys.refresh_cpu_usage();
+        let active = shared.active();
+        if active && !was_active {
+            // Same for per-process CPU before the first published process list.
             sys.refresh_processes_specifics(ProcessesToUpdate::All, true, proc_kind);
-            if let Some(g) = gpu_state.as_mut() {
-                g.sample();
-            }
-            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(300)));
+            std::thread::sleep(prime);
         }
+        if was_active && !active {
+            // Don't serve an outdated process list to the next viewer.
+            *shared.latest.write().unwrap() = Arc::new("{}".into());
+        }
+        was_active = active;
 
         let start = Instant::now();
         sys.refresh_cpu_usage();
         sys.refresh_memory();
-        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, proc_kind);
+        if active {
+            sys.refresh_processes_specifics(ProcessesToUpdate::All, true, proc_kind);
+        }
         let (gpus, gpu_procs) = gpu_state.as_mut().map(|g| g.sample()).unwrap_or_default();
 
-        let mut procs = Vec::with_capacity(sys.processes().len());
-        for (pid, p) in sys.processes() {
+        let mut procs = Vec::new();
+        for (pid, p) in sys.processes().iter().filter(|_| active) {
             // Skip kernel threads / userland threads listed as tasks.
             if p.thread_kind().is_some() {
                 continue;
@@ -267,7 +284,8 @@ fn run(shared: Arc<Shared>) {
             cpu: CpuStats {
                 total: sys.global_cpu_usage(),
                 cores: sys.cpus().iter().map(|c| c.cpu_usage()).collect(),
-                brand: brand.clone(),
+                brand: &brand,
+                topo: &topo,
             },
             mem: MemStats {
                 used: sys.used_memory(),
@@ -279,14 +297,17 @@ fn run(shared: Arc<Shared>) {
             gpus,
             procs,
         };
-        if let Ok(json) = serde_json::to_string(&snap) {
+        if active && let Ok(json) = serde_json::to_string(&snap) {
             *shared.latest.write().unwrap() = Arc::new(json);
         }
         // Only the fields the charts plot, in the same shape as `Snapshot`.
         let point = serde_json::json!({
             "ts": snap.ts,
             "interval": snap.interval,
-            "cpu": { "total": snap.cpu.total },
+            "cpu": {
+                "total": round1(snap.cpu.total),
+                "cores": snap.cpu.cores.iter().map(|&v| round1(v)).collect::<Vec<_>>(),
+            },
             "mem": {
                 "used": snap.mem.used,
                 "total": snap.mem.total,
@@ -309,4 +330,9 @@ fn run(shared: Arc<Shared>) {
             std::thread::sleep(shared.interval().saturating_sub(start.elapsed()).min(Duration::from_millis(100)));
         }
     }
+}
+
+/// Keeps history JSON small: one decimal is plenty for a chart.
+fn round1(v: f32) -> f64 {
+    (v as f64 * 10.0).round() / 10.0
 }

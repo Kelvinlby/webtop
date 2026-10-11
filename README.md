@@ -1,8 +1,10 @@
 # webtop
 
 Lightweight web resource monitor: CPU, RAM, NVIDIA GPU (SM, Tensor, VRAM) and a process list.
-Single ~1.5 MB binary with the UI embedded. It samples only while a browser is watching.
-The server keeps the last 15 minutes of chart data, so reloading the page (or opening it on another device) doesn't lose the history.
+Single ~1.5 MB binary with the UI embedded. CPU, memory and GPU are recorded continuously into a 15-minute buffer, so charts are already full when you open the page;
+the process list (the expensive part) is only collected while a browser is watching.
+The CPU card switches between an overall chart and a per-CPU view: a small chart per logical CPU, grouped by physical core (SMT siblings),
+L3 domain (AMD CCD / Intel ring) and socket, as read from `/sys/devices/system/cpu`.
 
 ```
 cargo build --release
@@ -16,7 +18,7 @@ cargo build --release
 | `-p, --port N` | Port (default 9898). |
 | `-a, --allow IP/CIDR,...` | Client IP whitelist. Requests from anything else get 403. |
 | `-d, --deny IP/CIDR,...` | Client IP blacklist, checked before `--allow`. |
-| `--interval MS` | Default sampling interval (1000). Viewers can pick 250 ms–5 s in the UI; the fastest active viewer wins. |
+| `--interval MS` | Sampling interval when nobody is watching, and the UI default (1000). Viewers can pick 250 ms–5 s in the UI; the fastest active viewer wins. |
 | `--wait-iface SECS` | Wait for the interface to get an address at boot (default 60). |
 | `--list-interfaces` | Print interfaces and their addresses. |
 

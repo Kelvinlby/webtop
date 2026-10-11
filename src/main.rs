@@ -1,5 +1,6 @@
 mod gpu;
 mod sampler;
+mod topo;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -163,8 +164,13 @@ async fn stats(State(app): State<Arc<App>>, Query(q): Query<StatsQuery>) -> impl
     ([(header::CONTENT_TYPE, "application/json")], (*body).clone())
 }
 
-async fn history(State(app): State<Arc<App>>) -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/json")], app.shared.history_json())
+#[derive(Deserialize)]
+struct HistoryQuery {
+    since: Option<u64>,
+}
+
+async fn history(State(app): State<Arc<App>>, Query(q): Query<HistoryQuery>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/json")], app.shared.history_json(q.since.unwrap_or(0)))
 }
 
 #[tokio::main(flavor = "current_thread")]

@@ -92,7 +92,7 @@ main{padding:16px 24px 32px}
 
 /* ---------- Cards ---------- */
 .card{background:var(--md-surface-c-low);border-radius:16px;padding:16px 20px 16px;display:flex;flex-direction:column;min-width:0;border:1px solid var(--md-outline-variant)}
-.card-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.card-h{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:8px 12px}
 .card-h .t{font-size:16px;line-height:24px;font-weight:500;letter-spacing:.009em}
 .card-h .s{font-size:12px;line-height:16px;color:var(--md-on-surface-variant);margin-top:2px;min-height:16px}
 .big{font-size:36px;line-height:44px;font-weight:400;letter-spacing:0;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -108,6 +108,27 @@ main{padding:16px 24px 32px}
 .core{height:40px;border-radius:6px;background:var(--md-surface-c-highest);position:relative;overflow:hidden}
 .core b{position:absolute;left:0;right:0;bottom:0;background:var(--c-cpu);border-radius:4px 4px 0 0;transition:height .25s}
 .core span{position:absolute;left:0;right:0;top:3px;text-align:center;font-size:10px;line-height:12px;color:var(--md-on-surface-variant);font-family:"Roboto Mono",monospace}
+
+/* Per-CPU view: socket > L3 domain (CCD / ring) > physical core > threads */
+.card-h .right{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px 16px}
+.seg.sm{height:32px;border-radius:16px}
+.seg.sm button{padding:0 12px;font-size:13px}
+.seg.sm button .ck{width:16px;height:16px}
+.cpuview{display:flex;flex-direction:column;flex:1;min-height:0}
+.cpuview[hidden]{display:none}
+/* Everything flexes so the tiles fill the card; columns are set from JS (--cols). */
+#cpu-per{gap:12px;margin-top:14px;min-height:300px}
+.topo-pkg,.topo-l3{flex:1;display:flex;flex-direction:column;gap:8px;min-height:0}
+.topo-l3.box{border:1px solid var(--md-outline-variant);border-radius:12px;padding:8px 10px 10px}
+.topo-h{font-size:12px;line-height:16px;font-weight:500;color:var(--md-on-surface-variant);letter-spacing:.04em}
+.topo-h span{font-weight:400;margin-left:6px}
+.topo-cores{flex:1;display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));grid-auto-rows:minmax(72px,1fr);gap:8px}
+.topo-core{display:flex;gap:4px;padding:4px;border-radius:12px;background:var(--md-surface-c-high)}
+.thr{flex:1;min-width:0;display:flex;flex-direction:column;border-radius:8px;background:var(--md-surface-c-low);padding:6px 8px 0}
+.thr-h{display:flex;justify-content:space-between;align-items:baseline;gap:4px;font-size:12px;line-height:16px;color:var(--md-on-surface-variant)}
+.thr-h b{font-size:14px;font-weight:500;color:var(--md-on-surface);font-family:"Roboto Mono",monospace}
+.mini{position:relative;flex:1;min-height:40px;margin:4px -8px 0}
+.mini canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 
 .kv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
 .kv div{background:var(--md-surface-c-high);border-radius:12px;padding:8px 12px}
@@ -127,7 +148,11 @@ main{padding:16px 24px 32px}
 .tw{overflow:auto;max-height:72vh;border-radius:12px;border:1px solid var(--md-outline-variant);background:var(--md-surface-c-lowest)}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
 th,td{padding:0 12px;height:36px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--md-outline-variant)}
-th{position:sticky;top:0;z-index:1;height:44px;background:var(--md-surface-c-high);color:var(--md-on-surface-variant);font-family:"Roboto Flex",Roboto,system-ui,sans-serif;font-weight:500;font-size:13px;cursor:pointer;user-select:none}
+/* Sticky on the whole header (not each th): per-cell sticky layers leave
+   hairline seams at fractional column widths that show the table background. */
+thead{position:sticky;top:0;z-index:1}
+thead tr{background:var(--md-surface-c-high)}
+th{height:44px;background:var(--md-surface-c-high);color:var(--md-on-surface-variant);font-family:"Roboto Flex",Roboto,system-ui,sans-serif;font-weight:500;font-size:13px;cursor:pointer;user-select:none}
 th:hover{color:var(--md-on-surface)}
 th.s{color:var(--md-primary)}
 th.s::after{content:"↓";margin-left:4px}th.s.asc::after{content:"↑"}
@@ -175,10 +200,16 @@ tbody tr:last-child td{border-bottom:0}
     <section class="card span-cpu">
       <div class="card-h">
         <div><div class="t">CPU</div><div class="s" id="cpusub"></div></div>
-        <div class="big" id="cpuv">–</div>
+        <div class="right">
+          <div class="seg sm" id="cpuview" role="group" aria-label="CPU view"></div>
+          <div class="big" id="cpuv">–</div>
+        </div>
       </div>
-      <div class="chart tall"><canvas id="c-cpu"></canvas></div>
-      <div class="cores" id="cores"></div>
+      <div class="cpuview" id="cpu-all">
+        <div class="chart tall"><canvas id="c-cpu"></canvas></div>
+        <div class="cores" id="cores"></div>
+      </div>
+      <div class="cpuview" id="cpu-per" hidden></div>
     </section>
 
     <section class="card span-mem">
@@ -257,7 +288,7 @@ function segmented(el, items, get, set){
     b.onclick = () => { set(val); paint(); };
     b.dataset.v = val; el.append(b);
   }
-  const paint = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === get())));
+  const paint = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === String(get()))));
   paint();
 }
 segmented($('rate'), RATES.map(r => [r, fmtRate(r)]), () => rate, v => { rate = v; store.set('rate', v); restart(); });
@@ -267,7 +298,7 @@ $('pause').onclick = () => {
   $('pause').setAttribute('aria-pressed', String(paused));
   $('pauseico').setAttribute('d', paused ? 'M8 5v14l11-7z' : 'M6 5h4v14H6zm8 0h4v14h-4z');
   $('pause').title = paused ? 'Resume updates' : 'Pause updates';
-  if (!paused) restart();
+  if (paused){ if (timer) clearTimeout(timer); timer = null; } else resume();
 };
 function applyTheme(){
   if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
@@ -287,11 +318,14 @@ class Chart {
     Object.assign(this, opt); this.cv = canvas; this.hoverX = null;
     canvas.addEventListener('pointermove', e => { this.hoverX = e.offsetX; this.draw(); this.tip(e); });
     canvas.addEventListener('pointerleave', () => { this.hoverX = null; tip.style.display = 'none'; this.draw(); });
-    new ResizeObserver(() => this.draw()).observe(canvas.parentElement);
+    this.ro = new ResizeObserver(() => this.draw()); this.ro.observe(canvas.parentElement);
     charts.push(this);
   }
+  destroy(){ this.ro.disconnect(); charts.splice(charts.indexOf(this), 1); }
   geom(){
     const w = this.cv.clientWidth, h = this.cv.clientHeight;
+    // mini: no axes, just the series (per-CPU tiles)
+    if (this.mini) return {w, h, l: 0, r: 0, t: 2, b: 0, pw: w, ph: h - 2};
     return {w, h, l: 44, r: 8, t: 8, b: 22, pw: w - 52, ph: h - 30};
   }
   draw(){
@@ -307,17 +341,19 @@ class Chart {
     c.font = '11px "Roboto Mono", monospace'; c.fillStyle = muted; c.textBaseline = 'middle';
     // grid + y labels
     c.strokeStyle = tok('--grid'); c.lineWidth = 1;
-    for (let i = 0; i <= 4; i++){
+    for (let i = this.mini ? 2 : 0; i <= (this.mini ? 2 : 4); i++){
       const v = max * i / 4, y = Math.round(Y(v)) + .5;
       c.beginPath(); c.moveTo(g.l, y); c.lineTo(g.l + g.pw, y); c.stroke();
-      if (i % 2 === 0){ c.textAlign = 'right'; c.fillText(this.yfmt(v), g.l - 8, y); }
+      if (i % 2 === 0 && !this.mini){ c.textAlign = 'right'; c.fillText(this.yfmt(v), g.l - 8, y); }
     }
     // x labels
     c.textBaseline = 'alphabetic';
+    if (!this.mini){
     const lbl = s => s >= 60 ? `−${s / 60}m` : `−${s}s`;
     c.textAlign = 'left'; c.fillText(lbl(win), g.l, g.h - 4);
     c.textAlign = 'center'; c.fillText(lbl(win / 2), g.l + g.pw / 2, g.h - 4);
     c.textAlign = 'right'; c.fillText('now', g.l + g.pw, g.h - 4);
+    }
     // series
     let lo = 0; while (lo < H.length && H[lo].t < t0 - 5000) lo++;
     const pts = H.slice(lo);
@@ -339,7 +375,7 @@ class Chart {
         c.lineTo(seg[seg.length - 1][0], g.t + g.ph); c.closePath();
         c.globalAlpha = .16; c.fillStyle = col; c.fill(); c.globalAlpha = 1;
         c.beginPath(); seg.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y));
-        c.strokeStyle = col; c.lineWidth = 2; c.lineJoin = 'round'; c.stroke();
+        c.strokeStyle = col; c.lineWidth = this.mini ? 1.5 : 2; c.lineJoin = 'round'; c.stroke();
       }
     }
     c.restore();
@@ -355,7 +391,7 @@ class Chart {
         c.beginPath(); c.moveTo(x, g.t); c.lineTo(x, g.t + g.ph); c.stroke(); c.globalAlpha = 1;
         for (const s of this.series){
           const v = best.v[s.key]; if (v == null) continue;
-          c.beginPath(); c.arc(x, Y(v), 4.5, 0, 7); c.fillStyle = tok(s.color); c.fill();
+          c.beginPath(); c.arc(x, Y(v), this.mini ? 3 : 4.5, 0, 7); c.fillStyle = tok(s.color); c.fill();
           c.lineWidth = 2; c.strokeStyle = tok('--md-surface-c-low'); c.stroke();
         }
         this.hit = best;
@@ -452,6 +488,77 @@ function paintCores(){
   });
 }
 
+/* ---------- per-CPU view ---------- */
+let cpuView = store.get('cpuView', 'all'); if (!['all', 'per'].includes(cpuView)) cpuView = 'all';
+let perSig = null, perCharts = [], perVals = [];
+segmented($('cpuview'), [['all', 'Overall'], ['per', 'Per CPU']], () => cpuView, v => { cpuView = v; store.set('cpuView', v); showCpuView(); });
+function showCpuView(){
+  $('cpu-all').hidden = cpuView !== 'all';
+  $('cpu-per').hidden = cpuView !== 'per';
+  if (cpuView === 'per') buildPer();
+  paintPer(); drawAll();
+}
+// Group logical CPUs: socket > L3 domain > physical core. Levels that don't
+// split anything (one socket, one L3, no SMT) are left out.
+function buildPer(){
+  if (!last) return;
+  const n = last.cpu.cores.length;
+  let topo = last.cpu.topo;
+  if (!topo || topo.length !== n) topo = last.cpu.cores.map((_, i) => ({cpu: i, core: i, l3: null, pkg: 0}));
+  const sig = JSON.stringify(topo);
+  if (sig === perSig) return;
+  perSig = sig;
+  perCharts.forEach(c => c.destroy()); perCharts = [];
+  const tree = new Map(); // pkg -> l3 -> core -> [index]
+  topo.forEach((t, i) => {
+    const l3s = tree.get(t.pkg) ?? tree.set(t.pkg, new Map()).get(t.pkg);
+    const cores = l3s.get(t.l3) ?? l3s.set(t.l3, new Map()).get(t.l3);
+    (cores.get(t.core) ?? cores.set(t.core, []).get(t.core)).push(i);
+  });
+  const byKey = m => [...m.entries()].sort((a, b) => (a[0] ?? -1) - (b[0] ?? -1));
+  const multiPkg = tree.size > 1, multiL3 = [...tree.values()].some(m => m.size > 1);
+  const tpc = Math.max(...topo.map(t => topo.filter(u => u.core === t.core && u.pkg === t.pkg).length));
+  const l3Name = /AMD/i.test(last.cpu.brand) ? 'CCD' : /Intel/i.test(last.cpu.brand) ? 'Ring' : 'L3 domain';
+  const count = cores => { const c = [...cores.values()]; return `${c.length} cores · ${c.flat().length} threads`; };
+  let html = '', l3n = 0;
+  for (const [pkg, l3s] of byKey(tree)){
+    const all = new Map([...l3s.values()].flatMap(m => [...m]));
+    html += `<div class="topo-pkg">${multiPkg ? `<div class="topo-h">SOCKET ${pkg}<span>${count(all)}</span></div>` : ''}`;
+    for (const [, cores] of byKey(l3s)){
+      html += `<div class="topo-l3${multiL3 ? ' box' : ''}">${multiL3 ? `<div class="topo-h">${l3Name.toUpperCase()} ${l3n++}<span>${count(cores)}</span></div>` : ''}<div class="topo-cores" style="--tpc:${tpc}">`;
+      for (const [, idx] of byKey(cores)){
+        idx.sort((a, b) => topo[a].cpu - topo[b].cpu);
+        html += `<div class="topo-core" title="${idx.length > 1 ? 'Physical core · ' : ''}CPU ${idx.map(i => topo[i].cpu).join(', ')}">` +
+          idx.map(i => `<div class="thr"><div class="thr-h"><span>CPU ${topo[i].cpu}</span><b data-cv="${i}">–</b></div><div class="mini"><canvas data-cc="${i}"></canvas></div></div>`).join('') + '</div>';
+      }
+      html += '</div></div>';
+    }
+    html += '</div>';
+  }
+  const el = $('cpu-per'); el.innerHTML = html;
+  layoutPer();
+  perVals = [];
+  el.querySelectorAll('[data-cv]').forEach(b => perVals[+b.dataset.cv] = b);
+  el.querySelectorAll('[data-cc]').forEach(cv => {
+    const i = +cv.dataset.cc;
+    perCharts.push(new Chart(cv, {mini: true, series: [{key: 'c' + i, color: '--c-cpu', label: 'CPU ' + topo[i].cpu}], max: 100, fmt: pctFmt, yfmt: v => v + '%'}));
+  });
+}
+// Balanced columns: as many as fit, then evened out so rows are full
+// (6 cores -> 3x2 rather than 4+2).
+function layoutPer(){
+  for (const g of $('cpu-per').querySelectorAll('.topo-cores')){
+    const n = g.children.length, minW = +g.style.getPropertyValue('--tpc') * 96, gap = 8;
+    const fit = Math.max(1, Math.floor((g.clientWidth + gap) / (minW + gap)));
+    g.style.setProperty('--cols', Math.ceil(n / Math.ceil(n / Math.min(n, fit))));
+  }
+}
+new ResizeObserver(layoutPer).observe($('cpu-per'));
+function paintPer(){
+  if (!last || cpuView !== 'per') return;
+  last.cpu.cores.forEach((v, i) => { if (perVals[i]) perVals[i].textContent = pct(v); });
+}
+
 /* ---------- process table ---------- */
 let sortK = store.get('sortK', 'cpu'), sortAsc = store.get('sortAsc', false), gpuOnly = false;
 document.querySelectorAll('th').forEach(th => th.onclick = () => {
@@ -486,6 +593,7 @@ function renderProcs(){
 // Chart values for a snapshot (full /api/stats or trimmed /api/history point).
 function values(s){
   const v = {cpu: s.cpu.total, mem: s.mem.used / s.mem.total * 100, memB: s.mem.used};
+  (s.cpu.cores || []).forEach((x, i) => v['c' + i] = x);
   if (s.mem.swap_total){ v.swap = s.mem.swap_used / s.mem.swap_total * 100; v.swapB = s.mem.swap_used; }
   for (const g of s.gpus){
     const k = 'g' + g.index;
@@ -516,6 +624,7 @@ function render(s){
   $('m-swap').textContent = s.mem.swap_total ? `${fmtB(s.mem.swap_used)}` : 'none';
   $('swaplg').style.display = s.mem.swap_total ? '' : 'none';
   paintCores();
+  if (cpuView === 'per'){ buildPer(); paintPer(); }
   s.gpus.forEach(renderGpu);
   drawAll();
   renderProcs();
@@ -523,29 +632,32 @@ function render(s){
 
 async function tick(){
   timer = null;
-  if (!paused && !document.hidden){
-    try {
-      const r = await fetch('api/stats?interval=' + rate, {cache: 'no-store'});
-      if (r.ok){ const s = await r.json(); if (s.ts){ render(s); lastOk = Date.now(); } }
-    } catch {}
-  }
-  const stale = !paused && Date.now() - lastOk > Math.max(rate * 4, 5000);
+  if (paused || document.hidden) return;
+  try {
+    const r = await fetch('api/stats?interval=' + rate, {cache: 'no-store'});
+    if (r.ok){ const s = await r.json(); if (s.ts){ render(s); lastOk = Date.now(); } }
+  } catch {}
+  const stale = Date.now() - lastOk > Math.max(rate * 4, 5000);
   $('dot').classList.toggle('off', stale);
   if (stale && lastOk) $('sub').textContent = 'disconnected — retrying…';
-  if (!paused) timer = setTimeout(tick, rate);
+  timer = setTimeout(tick, rate);
 }
 function restart(){ if (timer) clearTimeout(timer); tick(); }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) restart(); });
-// Backfill charts from the server's history so a reload doesn't start empty.
-async function boot(){
+// Pull in whatever the server sampled since our last point (on load, after a
+// background stint or a pause), then continue polling.
+async function resume(){
+  if (timer) clearTimeout(timer);
+  timer = null;
   try {
-    const r = await fetch('api/history', {cache: 'no-store'});
+    const r = await fetch('api/history?since=' + lastTs, {cache: 'no-store'});
     if (r.ok) for (const p of await r.json()) push(p);
   } catch {}
-  tick();
+  if (!timer) tick();
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) resume(); });
 applyTheme();
-boot();
+showCpuView();
+resume();
 </script>
 </body>
 </html>
