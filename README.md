@@ -2,6 +2,7 @@
 
 Lightweight web resource monitor: CPU, RAM, NVIDIA GPU (SM, Tensor, VRAM) and a process list.
 Single ~1.5 MB binary with the UI embedded. It samples only while a browser is watching.
+The server keeps the last 15 minutes of chart data, so reloading the page (or opening it on another device) doesn't lose the history.
 
 ```
 cargo build --release

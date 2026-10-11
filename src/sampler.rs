@@ -1,9 +1,9 @@
 //! Background sampling thread. It only works while someone is watching: if no
 //! client has fetched stats recently, it idles instead of walking /proc.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -17,6 +17,8 @@ use crate::gpu::{GpuSampler, GpuStats};
 const IDLE_AFTER: Duration = Duration::from_secs(10);
 pub const MIN_INTERVAL_MS: u64 = 250;
 pub const MAX_INTERVAL_MS: u64 = 10_000;
+/// How much chart history the server keeps (matches the largest UI window).
+const HISTORY_MS: u64 = 900_000;
 
 #[derive(Serialize)]
 struct Snapshot<'a> {
@@ -65,6 +67,9 @@ struct Proc {
 pub struct Shared {
     /// Latest snapshot, pre-serialized to JSON.
     pub latest: RwLock<Arc<String>>,
+    /// Recent chart points `(ts, json)`, oldest first, so a freshly loaded page
+    /// can backfill its charts.
+    history: Mutex<VecDeque<(u64, String)>>,
     /// Millis since `epoch` of the last client request.
     last_req: AtomicU64,
     /// Current sampling interval, as requested by viewers.
@@ -78,11 +83,35 @@ impl Shared {
     pub fn new(interval_ms: u64) -> Arc<Self> {
         Arc::new(Self {
             latest: RwLock::new(Arc::new("{}".into())),
+            history: Mutex::new(VecDeque::new()),
             last_req: AtomicU64::new(0),
             interval_ms: AtomicU64::new(interval_ms),
             interval_seen: AtomicU64::new(0),
             epoch: Instant::now(),
         })
+    }
+
+    /// Chart history as a JSON array of trimmed-down snapshots.
+    pub fn history_json(&self) -> String {
+        let h = self.history.lock().unwrap();
+        let mut out = String::with_capacity(h.iter().map(|(_, j)| j.len() + 1).sum::<usize>() + 2);
+        out.push('[');
+        for (i, (_, j)) in h.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(j);
+        }
+        out.push(']');
+        out
+    }
+
+    fn record(&self, ts: u64, json: String) {
+        let mut h = self.history.lock().unwrap();
+        h.push_back((ts, json));
+        while h.front().is_some_and(|(t, _)| *t + HISTORY_MS < ts) {
+            h.pop_front();
+        }
     }
 
     pub fn touch(&self) {
@@ -253,6 +282,27 @@ fn run(shared: Arc<Shared>) {
         if let Ok(json) = serde_json::to_string(&snap) {
             *shared.latest.write().unwrap() = Arc::new(json);
         }
+        // Only the fields the charts plot, in the same shape as `Snapshot`.
+        let point = serde_json::json!({
+            "ts": snap.ts,
+            "interval": snap.interval,
+            "cpu": { "total": snap.cpu.total },
+            "mem": {
+                "used": snap.mem.used,
+                "total": snap.mem.total,
+                "swap_used": snap.mem.swap_used,
+                "swap_total": snap.mem.swap_total,
+            },
+            "gpus": snap.gpus.iter().map(|g| serde_json::json!({
+                "index": g.index,
+                "sm": g.sm,
+                "tensor": g.tensor,
+                "power_w": g.power_w,
+                "vram_used": g.vram_used,
+                "vram_total": g.vram_total,
+            })).collect::<Vec<_>>(),
+        });
+        shared.record(snap.ts, point.to_string());
 
         // Sleep in short slices so a faster interval requested mid-sleep applies promptly.
         while start.elapsed() < shared.interval() {

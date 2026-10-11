@@ -483,10 +483,8 @@ function renderProcs(){
 }
 
 /* ---------- main render ---------- */
-function render(s){
-  last = s;
-  $('host').textContent = s.hostname; document.title = s.hostname + ' · webtop';
-  $('sub').textContent = `${fmtUp(s.uptime)} · load ${s.load.map(x => x.toFixed(2)).join(' ')}` + (s.interval < rate ? ` · sampling every ${fmtRate(s.interval)} (another viewer)` : '');
+// Chart values for a snapshot (full /api/stats or trimmed /api/history point).
+function values(s){
   const v = {cpu: s.cpu.total, mem: s.mem.used / s.mem.total * 100, memB: s.mem.used};
   if (s.mem.swap_total){ v.swap = s.mem.swap_used / s.mem.swap_total * 100; v.swapB = s.mem.swap_used; }
   for (const g of s.gpus){
@@ -494,10 +492,21 @@ function render(s){
     v[k + 'sm'] = g.sm; v[k + 'ten'] = g.tensor; v[k + 'pw'] = g.power_w;
     v[k + 'vr'] = g.vram_total ? g.vram_used / g.vram_total * 100 : null; v[k + 'vrB'] = g.vram_used;
   }
-  if (s.ts !== lastTs){
+  return v;
+}
+function push(s){
+  const v = values(s);
+  if (s.ts > lastTs){
     H.push({t: s.ts, iv: s.interval, v}); lastTs = s.ts;
     while (H.length && H[0].t < s.ts - KEEP_MS) H.shift();
   }
+  return v;
+}
+function render(s){
+  last = s;
+  $('host').textContent = s.hostname; document.title = s.hostname + ' · webtop';
+  $('sub').textContent = `${fmtUp(s.uptime)} · load ${s.load.map(x => x.toFixed(2)).join(' ')}` + (s.interval < rate ? ` · sampling every ${fmtRate(s.interval)} (another viewer)` : '');
+  const v = push(s);
   $('cpuv').textContent = pct(s.cpu.total);
   $('cpusub').textContent = `${s.cpu.brand} · ${s.cpu.cores.length} threads`;
   $('memv').textContent = pct(v.mem);
@@ -527,8 +536,16 @@ async function tick(){
 }
 function restart(){ if (timer) clearTimeout(timer); tick(); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !paused) restart(); });
+// Backfill charts from the server's history so a reload doesn't start empty.
+async function boot(){
+  try {
+    const r = await fetch('api/history', {cache: 'no-store'});
+    if (r.ok) for (const p of await r.json()) push(p);
+  } catch {}
+  tick();
+}
 applyTheme();
-tick();
+boot();
 </script>
 </body>
 </html>

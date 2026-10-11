@@ -163,6 +163,10 @@ async fn stats(State(app): State<Arc<App>>, Query(q): Query<StatsQuery>) -> impl
     ([(header::CONTENT_TYPE, "application/json")], (*body).clone())
 }
 
+async fn history(State(app): State<Arc<App>>) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/json")], app.shared.history_json())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = Args::parse();
@@ -203,6 +207,7 @@ async fn main() {
     let router = Router::new()
         .route("/", get(index))
         .route("/api/stats", get(stats))
+        .route("/api/history", get(history))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
 
