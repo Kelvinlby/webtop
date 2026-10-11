@@ -1,0 +1,20 @@
+# Example systemd user unit: ~/.config/systemd/user/webtop.service
+# Enable with: systemctl --user enable --now webtop  (and `loginctl enable-linger $USER` to start at boot)
+[Unit]
+Description=webtop resource monitor (Tailscale only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Application/webtop
+# Listen only on tailscale0, accept only Tailscale addresses.
+# Add e.g. `--deny 100.x.y.z,fd7a:...` to block specific peers (such as devices shared into your tailnet).
+ExecStart=%h/Application/webtop/webtop --interface tailscale0 --port 9898 \
+  --allow 100.64.0.0/10,fd7a:115c:a1e0::/48 \
+  --wait-iface 300
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
