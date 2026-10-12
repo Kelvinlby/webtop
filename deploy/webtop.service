@@ -12,6 +12,7 @@ WorkingDirectory=%h/Application/webtop
 # Add e.g. `--deny 100.x.y.z,fd7a:...` to block specific peers (such as devices shared into your tailnet).
 ExecStart=%h/Application/webtop/webtop --interface tailscale0 --port 9898 \
   --allow 100.64.0.0/10,fd7a:115c:a1e0::/48 \
+  --tailscale-cert \
   --wait-iface 300
 Restart=always
 RestartSec=5

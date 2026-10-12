@@ -1,15 +1,17 @@
 mod gpu;
 mod sampler;
+mod tls;
 mod topo;
 
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Query, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use clap::Parser;
@@ -57,6 +59,21 @@ struct Args {
     /// boot when tailscale comes up after us). 0 = fail immediately.
     #[arg(long, default_value_t = 60)]
     wait_iface: u64,
+
+    /// Serve HTTPS using a certificate from `tailscale cert` for this node's
+    /// MagicDNS name (fetched at startup and renewed automatically). Needs
+    /// `sudo tailscale set --operator=$USER` once when not running as root.
+    #[arg(long)]
+    tailscale_cert: bool,
+
+    /// Serve HTTPS with this PEM certificate (chain). Reloaded when it
+    /// changes. With --tailscale-cert: where to store the fetched one.
+    #[arg(long, value_name = "FILE", requires = "tls_key")]
+    tls_cert: Option<PathBuf>,
+
+    /// PEM private key for --tls-cert.
+    #[arg(long, value_name = "FILE", requires = "tls_cert")]
+    tls_key: Option<PathBuf>,
 
     /// List network interfaces and their addresses, then exit.
     #[arg(long)]
@@ -173,6 +190,23 @@ async fn history(State(app): State<Arc<App>>, Query(q): Query<HistoryQuery>) -> 
     ([(header::CONTENT_TYPE, "application/json")], app.shared.history_json(q.since.unwrap_or(0)))
 }
 
+/// Plain-HTTP requests on an HTTPS port: send them to the https:// URL.
+async fn to_https(
+    State((domain, port)): State<(Option<String>, u16)>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    let host = match domain {
+        Some(d) => format!("{d}:{port}"),
+        None => match headers.get(header::HOST).and_then(|h| h.to_str().ok()) {
+            Some(h) => h.to_string(),
+            None => return (StatusCode::BAD_REQUEST, "use https://\n").into_response(),
+        },
+    };
+    let path = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    Redirect::permanent(&format!("https://{host}{path}")).into_response()
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args = Args::parse();
@@ -203,6 +237,27 @@ async fn main() {
         }
     };
 
+    let tls = if args.tailscale_cert || args.tls_cert.is_some() {
+        let opts = tls::TlsOptions {
+            cert: args.tls_cert.clone(),
+            key: args.tls_key.clone(),
+            tailscale: args.tailscale_cert,
+            wait: Duration::from_secs(args.wait_iface),
+        };
+        match tls::Tls::setup(opts).await {
+            Ok(t) => {
+                t.clone().spawn_reloader();
+                Some(t)
+            }
+            Err(e) => {
+                eprintln!("webtop: {e}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+
     let interval = Duration::from_millis(
         args.interval.clamp(sampler::MIN_INTERVAL_MS, sampler::MAX_INTERVAL_MS),
     );
@@ -216,6 +271,10 @@ async fn main() {
         .route("/api/history", get(history))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
+    let redirect = Router::new()
+        .fallback(to_https)
+        .with_state((tls.as_ref().and_then(|t| t.domain.clone()), args.port))
+        .layer(middleware::from_fn_with_state(app.clone(), guard));
 
     let mut tasks = tokio::task::JoinSet::new();
     for ip in binds {
@@ -232,6 +291,16 @@ async fn main() {
                 std::process::exit(1);
             }
         };
+        if let Some(tls) = &tls {
+            let url = match &tls.domain {
+                Some(d) => format!("https://{d}:{} ({addr})", args.port),
+                None => format!("https://{addr}"),
+            };
+            eprintln!("webtop: listening on {url}");
+            let (tls, r, redirect) = (tls.clone(), router.clone(), redirect.clone());
+            tasks.spawn(async move { Ok(tls.serve(listener, r, redirect).await) });
+            continue;
+        }
         eprintln!("webtop: listening on http://{addr}");
         let r = router.clone().into_make_service_with_connect_info::<SocketAddr>();
         tasks.spawn(async move { axum::serve(listener, r).await });

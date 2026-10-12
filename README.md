@@ -8,7 +8,7 @@ L3 domain (AMD CCD / Intel ring) and socket, as read from `/sys/devices/system/c
 
 ```
 cargo build --release
-./target/release/webtop -i tailscale0 --allow 100.64.0.0/10,fd7a:115c:a1e0::/48
+./target/release/webtop -i tailscale0 --allow 100.64.0.0/10,fd7a:115c:a1e0::/48 --tailscale-cert
 ```
 
 | Flag | Meaning |
@@ -20,7 +20,18 @@ cargo build --release
 | `-d, --deny IP/CIDR,...` | Client IP blacklist, checked before `--allow`. |
 | `--interval MS` | Sampling interval when nobody is watching, and the UI default (1000). Viewers can pick 250 ms–5 s in the UI; the fastest active viewer wins. |
 | `--wait-iface SECS` | Wait for the interface to get an address at boot (default 60). |
+| `--tailscale-cert` | Serve HTTPS with a certificate from `tailscale cert` for this node's MagicDNS name (renewed automatically). |
+| `--tls-cert FILE`, `--tls-key FILE` | Serve HTTPS with your own PEM certificate/key (reloaded when the files change). With `--tailscale-cert`: where to store the fetched ones. |
 | `--list-interfaces` | Print interfaces and their addresses. |
+
+## HTTPS over Tailscale
+With `--tailscale-cert`, webtop serves `https://<host>.<tailnet>.ts.net:9898` using a Let's Encrypt certificate obtained through tailscaled.
+Plain `http://` requests to the same port are redirected there. One-time setup:
+1. Enable **HTTPS Certificates** in the Tailscale admin console (DNS page; MagicDNS must be on).
+2. If webtop doesn't run as root: `sudo tailscale set --operator=$USER`.
+
+The certificate is stored in `$STATE_DIRECTORY`, `$XDG_STATE_HOME/webtop` or `~/.local/state/webtop`, and refreshed every 12 h.
+Client IPs are still the real Tailscale IPs, so `--allow`/`--deny` keep working (unlike putting `tailscale serve` in front).
 
 ## GPU metrics
 - **SM / Tensor** come from NVML GPM (Hopper, Blackwell and newer): real SM activity and tensor-pipe activity.
@@ -35,7 +46,7 @@ Description=webtop
 After=network-online.target tailscaled.service
 
 [Service]
-ExecStart=%h/.local/bin/webtop -i tailscale0 --allow 100.64.0.0/10,fd7a:115c:a1e0::/48
+ExecStart=%h/.local/bin/webtop -i tailscale0 --allow 100.64.0.0/10,fd7a:115c:a1e0::/48 --tailscale-cert
 Restart=on-failure
 
 [Install]
