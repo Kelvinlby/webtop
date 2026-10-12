@@ -20,13 +20,13 @@ cargo build --release
 | `-d, --deny IP/CIDR,...` | Client IP blacklist, checked before `--allow`. |
 | `--interval MS` | Sampling interval when nobody is watching, and the UI default (1000). Viewers can pick 250 ms–5 s in the UI; the fastest active viewer wins. |
 | `--wait-iface SECS` | Wait for the interface to get an address at boot (default 60). |
-| `--tailscale-cert` | Serve HTTPS with a certificate from `tailscale cert` for this node's MagicDNS name (renewed automatically). |
+| `--tailscale-cert` | Serve HTTPS with a certificate from `tailscale cert` for this node's MagicDNS name (renewed automatically). Tailscale clients on plain HTTP are redirected. |
 | `--tls-cert FILE`, `--tls-key FILE` | Serve HTTPS with your own PEM certificate/key (reloaded when the files change). With `--tailscale-cert`: where to store the fetched ones. |
 | `--list-interfaces` | Print interfaces and their addresses. |
 
 ## HTTPS over Tailscale
 With `--tailscale-cert`, webtop serves `https://<host>.<tailnet>.ts.net:9898` using a Let's Encrypt certificate obtained through tailscaled.
-Plain `http://` requests to the same port are redirected there. One-time setup:
+Plain `http://` requests from Tailscale addresses are redirected there; other clients (e.g. on a LAN interface) keep getting plain HTTP on the same port. One-time setup:
 1. Enable **HTTPS Certificates** in the Tailscale admin console (DNS page; MagicDNS must be on).
 2. If webtop doesn't run as root: `sudo tailscale set --operator=$USER`.
 

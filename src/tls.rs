@@ -1,8 +1,10 @@
 //! HTTPS support: a certificate from PEM files or from `tailscale cert`,
 //! reloaded when it changes, and a listener that speaks both TLS and plain
-//! HTTP on the same port (plain HTTP only gets a redirect to https://).
+//! HTTP on the same port. Plain HTTP from Tailscale addresses is redirected
+//! to https:// (the certificate's name only resolves inside the tailnet);
+//! anyone else, e.g. on the LAN, keeps getting plain HTTP.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -123,7 +125,7 @@ impl Tls {
     }
 
     /// Accept connections forever. TLS connections get `app`; plain HTTP
-    /// ones get `redirect`.
+    /// ones get `redirect` if they come from a Tailscale address, else `app`.
     pub async fn serve(self: Arc<Self>, listener: TcpListener, app: Router, redirect: Router) {
         loop {
             let (stream, peer) = match listener.accept().await {
@@ -149,11 +151,22 @@ impl Tls {
                     if let Ok(Ok(s)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, accept).await {
                         serve_conn(s, peer, app).await;
                     }
-                } else {
+                } else if is_tailscale(peer.ip()) {
                     serve_conn(stream, peer, redirect).await;
+                } else {
+                    serve_conn(stream, peer, app).await;
                 }
             });
         }
+    }
+}
+
+fn is_tailscale(ip: IpAddr) -> bool {
+    match crate::canonical(ip) {
+        // 100.64.0.0/10 (CGNAT range Tailscale assigns from)
+        IpAddr::V4(v4) => v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64,
+        // fd7a:115c:a1e0::/48
+        IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
     }
 }
 
